@@ -1,0 +1,22 @@
+ISRO_P2_Driver_node:
+  ros__parameters:
+    # Connection mode: "serial", "tcp_client", "tcp_server"
+    mode: "serial"
+    
+    # Serial configuration
+    serial:
+      port: "/dev/ttyUSB0"
+      baud: 921600
+    
+    # Frame IDs
+    frame_id: "gps_link"
+    imu_frame_id: "imu_link"
+    
+    # Publishing rate (Hz)
+    publish_rate: 20.0
+    
+    # Publish raw IMU data from MSG_ID_IMU (2389)
+    publish_raw_imu: true
+    
+    # Coordinate system (true=ENU, false=NED)
+    use_enu: true

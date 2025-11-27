@@ -1,0 +1,27 @@
+# Build directories
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled objects
+*.o
+*.so
+*.a
+
+# ROS2
+*.msg~
+*.srv~

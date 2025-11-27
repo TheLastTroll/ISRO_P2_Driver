@@ -1,0 +1,10 @@
+ISRO_P2_Driver_node:
+  ros__parameters:
+    mode: "tcp_client"
+    tcp:
+      ip: "192.168.1.100"  # 장비 IP
+      port: 3000           # 장비 Port
+    # 기타 설정
+    frame_id: "gps_link"
+    publish_rate: 20.0
+    use_enu: true      

@@ -1,0 +1,5 @@
+ISRO_P2_Driver_node:
+  ros__parameters:
+    mode: "tcp_server"
+    tcp:
+      port: 3000           # PC에서 열어둘 Port
