@@ -30,7 +30,7 @@ public:
         
         this->declare_parameter("frame_id", "gps_link");
         this->declare_parameter("imu_frame_id", "imu_link");
-        this->declare_parameter("publish_rate", 50.0);
+        this->declare_parameter("publish_rate", 100.0);
         this->declare_parameter("publish_raw_imu", true);
         this->declare_parameter("use_enu", true); // True: ENU(ROS표준), False: NED(장비표준)
 

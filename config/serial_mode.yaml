@@ -12,6 +12,6 @@ ISRO_P2_Driver_node:
     frame_id: "gps_link"
     imu_frame_id: "imu_link"
     
-    publish_rate: 50.0        # 장비 출력 속도와 맞춤 (데이터 손실 방지)
+    publish_rate: 100.0        # 장비 출력 속도와 맞춤 (데이터 손실 방지)
     publish_raw_imu: true     # 100Hz IMU 데이터 발행 여부
     use_enu: true             # true: ENU (ROS표준), false: NED

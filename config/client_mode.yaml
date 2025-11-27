@@ -12,6 +12,6 @@ ISRO_P2_Driver_node:
     frame_id: "gps_link"
     imu_frame_id: "imu_link"
     
-    publish_rate: 50.0
+    publish_rate: 100.0
     publish_raw_imu: true
     use_enu: true
