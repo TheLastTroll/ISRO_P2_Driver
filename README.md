@@ -1,14 +1,14 @@
 # ISRO_P2_Driver
 
-PIMTP (PIM Transfer Protocol) 기반 GNSS/INS 장비 ISRO-P2용 ROS2 드라이버입니다.
+PIMTP (PIM Transfer Protocol) 기반 GNSS/INS 장비 ISRO-P2/ISRO-P2-E용 ROS2 드라이버입니다.
 
 GNSS/INS 수신기로부터 PVA (Position, Velocity, Attitude) 및 IMU 데이터를 파싱하여 표준 ROS2 메시지로 발행합니다.
 
 ## 주요 기능
 
-- **다중 연결 모드**: Serial, TCP Client, TCP Server 지원
+- **다중 연결 모드**: Serial(ISRO-P2), TCP Client(ISRO-P2-E), TCP Server(ISRO-P2-E) 지원
 - **표준 ROS2 메시지**: NavSatFix, Imu, TwistWithCovarianceStamped
-- **RTK 지원**: NTRIP 클라이언트 연동을 통한 RTK 보정
+- **RTK 지원**: NTRIP 클라이언트 연동을 통한 RTK 보정 (외부망 필요)
 - **GPS 시간 동기화**: GPS Week/Milliseconds 기반 정밀 타임스탬프
 - **ENU/NED 좌표 변환**: 설정 가능한 좌표계
 - **하드웨어 상태 모니터링**: 온도, 전압, CPU 사용률 실시간 모니터링
@@ -213,20 +213,84 @@ ros2 service call /isro_p2/reset std_srvs/srv/Trigger
 
 ## RTK 설정 (NTRIP)
 
-드라이버와 함께 NTRIP 클라이언트 노드를 실행합니다:
+드라이버와 함께 NTRIP 클라이언트 노드를 실행합니다.
+
+### 대화형 모드 (권장)
 
 ```bash
 # 터미널 1: 드라이버 실행
 ros2 launch ISRO_P2_Driver ISRO_P2_Driver_launch.py mode:=serial
 
-# 터미널 2: NTRIP 클라이언트 실행 (국토지리정보원 예시)
+# 터미널 2: NTRIP 클라이언트 실행 (대화형)
+ros2 run ISRO_P2_Driver ntrip.py
+```
+
+실행 시 대화형으로 설정을 입력받습니다:
+
+```
+==================================================
+       NTRIP 클라이언트 설정
+==================================================
+
+[?] 국토지리정보원 VRS-RTCM32 서비스를 사용하시겠습니까?
+    (Host: rts2.ngii.go.kr, Port: 2101, Mount: VRS-RTCM32)
+
+    VRS-RTCM32 사용 (Y/n): y
+
+    [√] 국토지리정보원 VRS-RTCM32 설정 적용
+
+    사용자 ID (국토지리정보원 가입 ID): myusername
+
+--------------------------------------------------
+    [설정 완료]
+    Host:       rts2.ngii.go.kr
+    Port:       2101
+    Mountpoint: VRS-RTCM32
+    Username:   myusername
+    Password:   ****
+==================================================
+```
+
+### 커스텀 NTRIP Caster 사용 시
+
+`n`을 입력하면 개별 설정을 입력받습니다:
+
+```
+    VRS-RTCM32 사용 (Y/n): n
+
+    [i] 커스텀 NTRIP Caster 설정을 입력하세요.
+--------------------------------------------------
+    Host [rts2.ngii.go.kr]: rtk.example.com
+    Port [2101]: 2102
+    Mountpoint [VRS-RTCM32]: RTCM3_MSM
+    Username: user123
+    Password [ngii]: mypassword
+```
+
+### 비대화형 모드 (스크립트/자동화용)
+
+파라미터를 모두 지정하면 대화형 입력을 건너뜁니다:
+
+```bash
 ros2 run ISRO_P2_Driver ntrip.py --ros-args \
   -p host:="rts2.ngii.go.kr" \
   -p port:=2101 \
   -p mountpoint:="VRS-RTCM32" \
   -p username:="사용자ID" \
-  -p password:="ngii"
+  -p password:="ngii" \
+  -p interactive:=false
 ```
+
+### NTRIP 파라미터
+
+| 파라미터 | 기본값 | 설명 |
+|----------|--------|------|
+| `host` | `rts2.ngii.go.kr` | NTRIP Caster 호스트 |
+| `port` | `2101` | NTRIP Caster 포트 |
+| `mountpoint` | `VRS-RTCM32` | 마운트포인트 |
+| `username` | (없음) | 사용자 ID |
+| `password` | `ngii` | 비밀번호 |
+| `interactive` | `true` | 대화형 모드 활성화 |
 
 ### RTK 데이터 흐름
 
@@ -612,7 +676,7 @@ MIT License
 
 ## 작성자
 
-이정환 (jhlee@insungsys.kr)  
+이정환 (rnd@insungsys.kr)  
 인성 기술연구소
 www.insungsys.kr
 
