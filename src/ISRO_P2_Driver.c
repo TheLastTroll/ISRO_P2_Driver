@@ -16,9 +16,9 @@
 
 // --- Constants ---
 #define UART_BUFFER_SIZE    4096
-#define RING_BUFFER_SIZE    131072  
+#define RING_BUFFER_SIZE    131072
 #define MAX_PACKET_SIZE     4096
-#define PVA_PAYLOAD_SIZE    126    // Table 46의 순수 데이터 크기
+#define PVA_PAYLOAD_SIZE    126    // Table 46 순수 데이터 크기
 #define PACKET_TIMEOUT_MS   1000
 
 #define PIMTP_SYNC1         0xAC
@@ -70,7 +70,6 @@ typedef struct {
     uint32_t read_pos;
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
-    pthread_cond_t not_full;
 } RING_BUFFER_T;
 
 typedef enum {
@@ -100,18 +99,18 @@ typedef struct {
 struct ISRO_P2_T {
     P2_Config_T config;
     int main_fd;
-    int client_fd; 
-    
+    int client_fd;
+
     pthread_t read_thread;
     pthread_t process_thread;
     RING_BUFFER_T* ring_buffer;
     bool running;
     pthread_mutex_t data_mutex;
-    
+
     PVA_MESSAGE_T latest_pva;
     bool pva_valid;
     struct timespec pva_timestamp;
-    
+
     IMU_MESSAGE_T latest_imu;
     bool imu_valid;
     struct timespec imu_timestamp;
@@ -120,8 +119,8 @@ struct ISRO_P2_T {
 
     char latest_nmea[1024];
     bool nmea_valid;
-	
-	STATUS_MESSAGE_T latest_status;
+
+    STATUS_MESSAGE_T latest_status;
     bool status_valid;
 };
 
@@ -160,6 +159,7 @@ static uint32_t CalculateNovAtelCRC32(const uint8_t* data, uint32_t len) {
 static void ProcessNMEASentence(struct ISRO_P2_T* device, const uint8_t* sentence, uint32_t len);
 
 // --- Ring Buffer Implementation ---
+// Overwrite-on-full 정책. 가장 오래된 데이터를 덮어쓰며 producer는 절대 블록되지 않음.
 static RING_BUFFER_T* RingBuffer_Create(uint32_t size) {
     RING_BUFFER_T* rb = (RING_BUFFER_T*)calloc(1, sizeof(RING_BUFFER_T));
     if (!rb) return NULL;
@@ -168,7 +168,6 @@ static RING_BUFFER_T* RingBuffer_Create(uint32_t size) {
     rb->size = size;
     pthread_mutex_init(&rb->mutex, NULL);
     pthread_cond_init(&rb->not_empty, NULL);
-    pthread_cond_init(&rb->not_full, NULL);
     return rb;
 }
 
@@ -176,7 +175,6 @@ static void RingBuffer_Destroy(RING_BUFFER_T* rb) {
     if (!rb) return;
     pthread_mutex_destroy(&rb->mutex);
     pthread_cond_destroy(&rb->not_empty);
-    pthread_cond_destroy(&rb->not_full);
     free(rb->buffer);
     free(rb);
 }
@@ -205,20 +203,16 @@ static int RingBuffer_Read(RING_BUFFER_T* rb, uint8_t* data, uint32_t max_len) {
         data[i] = rb->buffer[rb->read_pos];
         rb->read_pos = (rb->read_pos + 1) % rb->size;
     }
-    pthread_cond_signal(&rb->not_full);
     pthread_mutex_unlock(&rb->mutex);
     return to_read;
 }
 
 // --- Message Processors ---
 static void ProcessPVAMessage(struct ISRO_P2_T* device, const uint8_t* data, uint32_t len, uint16_t week, uint32_t ms) {
-    if (len < PVA_PAYLOAD_SIZE) {
-        // printf("[WARN] PVA Payload too short: %d < %d\n", len, PVA_PAYLOAD_SIZE);
-        return; 
-    }
-    
+    if (len < PVA_PAYLOAD_SIZE) return;
+
     PVA_MESSAGE_T pva = {0};
-    memcpy(&pva, data, PVA_PAYLOAD_SIZE); 
+    memcpy(&pva, data, PVA_PAYLOAD_SIZE);
     pva.header_gps_week = week;
     pva.header_gps_ms = ms;
 
@@ -231,23 +225,24 @@ static void ProcessPVAMessage(struct ISRO_P2_T* device, const uint8_t* data, uin
 
 static void ProcessIMUMessage(struct ISRO_P2_T* device, const uint8_t* data, uint32_t len) {
     if (len < sizeof(IMU_MESSAGE_T)) return;
-    IMU_MESSAGE_T* imu = (IMU_MESSAGE_T*)data;
-    
+
+    IMU_MESSAGE_T imu;
+    memcpy(&imu, data, sizeof(IMU_MESSAGE_T));
+
     pthread_mutex_lock(&device->data_mutex);
-    memcpy(&device->latest_imu, imu, sizeof(IMU_MESSAGE_T));
+    memcpy(&device->latest_imu, &imu, sizeof(IMU_MESSAGE_T));
     device->imu_valid = true;
     clock_gettime(CLOCK_REALTIME, &device->imu_timestamp);
-    if (device->imu_callback) device->imu_callback(imu, device->imu_user_data);
+    if (device->imu_callback) device->imu_callback(&imu, device->imu_user_data);
     pthread_mutex_unlock(&device->data_mutex);
 }
 
-// STATUS 메시지 처리 함수
 static void ProcessStatusMessage(struct ISRO_P2_T* device, const uint8_t* data, uint32_t len) {
     if (len < sizeof(STATUS_MESSAGE_T)) return;
-    
+
     STATUS_MESSAGE_T status;
     memcpy(&status, data, sizeof(STATUS_MESSAGE_T));
-    
+
     pthread_mutex_lock(&device->data_mutex);
     memcpy(&device->latest_status, &status, sizeof(STATUS_MESSAGE_T));
     device->status_valid = true;
@@ -258,7 +253,7 @@ static void ProcessAutomotiveMessage(struct ISRO_P2_T* device, const uint8_t* pa
     if (len < sizeof(AUTOMOTIVE_HEADER_T)) return;
     AUTOMOTIVE_HEADER_T* header = (AUTOMOTIVE_HEADER_T*)payload;
     const uint8_t* msg_data = payload + sizeof(AUTOMOTIVE_HEADER_T);
-    
+
     uint16_t week = header->gps_week;
     uint32_t ms = header->gps_millisecond;
 
@@ -271,13 +266,11 @@ static void ProcessAutomotiveMessage(struct ISRO_P2_T* device, const uint8_t* pa
             break;
         case MSG_ID_STATUS:
             ProcessStatusMessage(device, msg_data, header->message_data_size);
-            // printf("[INFO] STATUS Message Received (Size: %d)\n", header->message_data_size);
             break;
         case MSG_ID_VERSION:
-            // 추후 구현: 버전 정보 처리
+            // TODO: 버전 정보 처리
             break;
         default:
-            // printf("[INFO] Unknown AutoMsg ID: %d\n", header->message_id);
             break;
     }
 }
@@ -287,7 +280,7 @@ static void ProcessNMEASentence(struct ISRO_P2_T* device, const uint8_t* sentenc
     uint32_t copy_len = (len < sizeof(device->latest_nmea) - 1) ? len : sizeof(device->latest_nmea) - 1;
     memcpy(device->latest_nmea, sentence, copy_len);
     device->latest_nmea[copy_len] = '\0';
-    
+
     // Remove CR/LF
     char* p = device->latest_nmea;
     while (*p) {
@@ -300,22 +293,19 @@ static void ProcessNMEASentence(struct ISRO_P2_T* device, const uint8_t* sentenc
 
 static void ProcessPIMTPPacket(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx) {
     switch (ctx->payload_type) {
-        case PIMTP_PAYLOAD_AUTOMOTIVE: // Type 1
+        case PIMTP_PAYLOAD_AUTOMOTIVE:
             ProcessAutomotiveMessage(device, ctx->payload_buffer, ctx->payload_length);
             break;
-        case PIMTP_PAYLOAD_NMEA:       // Type 4
-			// [디버깅용] NMEA 패킷 수신 확인
-            //printf("[DEBUG] NMEA Packet Received inside PIMTP (Len: %d)\n", ctx->payload_length);		
+        case PIMTP_PAYLOAD_NMEA:
             ProcessNMEASentence(device, ctx->payload_buffer, ctx->payload_length);
             break;
-        case PIMTP_PAYLOAD_RTK_CORRECTIONS: // Type 2 (Input Only usually)
-            // printf("[INFO] RTK Corrections Loopback Received?\n");
+        case PIMTP_PAYLOAD_RTK_CORRECTIONS:
+            // 입력 전용 채널. 장비에서 루프백되는 경우는 무시.
             break;
-        case PIMTP_PAYLOAD_UPDATE_DATA:     // Type 3
-            // Firmware update packet - ignore for driver
+        case PIMTP_PAYLOAD_UPDATE_DATA:
+            // Firmware update 패킷은 드라이버에서 처리하지 않음.
             break;
         default:
-            // printf("[WARN] Unknown Payload Type: %d\n", ctx->payload_type);
             break;
     }
 }
@@ -323,12 +313,12 @@ static void ProcessPIMTPPacket(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx) 
 static void ParseByte(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx, uint8_t byte) {
     switch (ctx->state) {
         case STATE_SEARCH_SYNC:
-            if (byte == '$') { // Start of Raw NMEA
+            if (byte == '$') { // Raw NMEA 시작
                 ctx->nmea_buffer[0] = byte;
                 ctx->nmea_index = 1;
                 ctx->state = STATE_PROCESS_NMEA;
             }
-            else if (byte == PIMTP_SYNC1) { // Start of PIMTP
+            else if (byte == PIMTP_SYNC1) { // PIMTP 시작
                 ctx->header_buffer[0] = byte;
                 ctx->header_index = 1;
                 ctx->state = STATE_READ_PIMTP_HEADER;
@@ -337,8 +327,8 @@ static void ParseByte(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx, uint8_t b
 
         case STATE_READ_PIMTP_HEADER:
             ctx->header_buffer[ctx->header_index++] = byte;
-            
-            // Check Sync Bytes
+
+            // Sync 바이트 확인
             if (ctx->header_index == 2 && byte != PIMTP_SYNC2) ctx->state = STATE_SEARCH_SYNC;
             else if (ctx->header_index == 3 && byte != PIMTP_SYNC3) ctx->state = STATE_SEARCH_SYNC;
             else if (ctx->header_index == 4 && byte != PIMTP_SYNC4) ctx->state = STATE_SEARCH_SYNC;
@@ -346,18 +336,16 @@ static void ParseByte(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx, uint8_t b
                 PIMTP_HEADER_T* header = (PIMTP_HEADER_T*)ctx->header_buffer;
                 ctx->payload_type = header->payload_type;
                 ctx->payload_length = header->payload_length;
-                
+
                 if (ctx->payload_length > 0 && ctx->payload_length < MAX_PACKET_SIZE) {
                     ctx->payload_buffer = (uint8_t*)malloc(ctx->payload_length);
                     if (ctx->payload_buffer) {
                         ctx->payload_index = 0;
                         ctx->state = STATE_READ_PAYLOAD;
                     } else {
-                        // Malloc Fail
                         ctx->state = STATE_SEARCH_SYNC;
                     }
                 } else {
-                    // Invalid Length
                     ctx->state = STATE_SEARCH_SYNC;
                 }
             }
@@ -375,36 +363,29 @@ static void ParseByte(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx, uint8_t b
             ctx->crc_buffer[ctx->crc_index++] = byte;
             if (ctx->crc_index >= 4) {
                 uint32_t received_crc = ReadLE32(ctx->crc_buffer);
-                
+
                 uint8_t* verify_buf = (uint8_t*)malloc(12 + ctx->payload_length);
                 if (verify_buf) {
                     memcpy(verify_buf, ctx->header_buffer, 12);
                     memcpy(verify_buf + 12, ctx->payload_buffer, ctx->payload_length);
-                    
+
                     uint32_t calc_crc = CalculateNovAtelCRC32(verify_buf, 12 + ctx->payload_length);
                     free(verify_buf);
 
-                    // 디버그용 Type 4 (NMEA)는 CRC 관련
-                    if (received_crc == calc_crc || ctx->payload_type == 4) {
-                        
-                        // 만약 CRC가 틀렸는데 Type 4라서 들어온 경우 경고 로그 출력
-                        if (received_crc != calc_crc) {
-                            printf("[WARN] CRC Failed but Forcing NMEA! Type: %d, Recv: 0x%08X vs Calc: 0x%08X\n", 
-                                   ctx->payload_type, received_crc, calc_crc);
-                        } else {
-                            // 정상 통과 시 디버그 로그 (너무 많으면 주석 처리)
-                            //printf("[DEBUG] Packet Valid! Type: %d, Len: %d\n", ctx->payload_type, ctx->payload_length);
-                        }
-
+                    // NMEA(Type 4)는 CRC 불일치여도 통과시키되 경고를 남김.
+                    // 일부 펌웨어 버전에서 NMEA 패킷의 CRC 계산이 잘못 들어오는 케이스가 관찰되었음.
+                    if (received_crc == calc_crc) {
                         ProcessPIMTPPacket(device, ctx);
-
+                    } else if (ctx->payload_type == PIMTP_PAYLOAD_NMEA) {
+                        printf("[WARN] NMEA CRC mismatch (passing through): Recv 0x%08X vs Calc 0x%08X\n",
+                               received_crc, calc_crc);
+                        ProcessPIMTPPacket(device, ctx);
                     } else {
-                        // 진짜 에러 (Type 1 등이 깨진 경우)
-                        printf("[ERROR] CRC Mismatch & Dropped! Type: %d, Len: %d, Recv: 0x%08X vs Calc: 0x%08X\n", 
+                        printf("[ERROR] CRC mismatch dropped. Type: %d, Len: %d, Recv: 0x%08X vs Calc: 0x%08X\n",
                                ctx->payload_type, ctx->payload_length, received_crc, calc_crc);
                     }
                 }
-                
+
                 if (ctx->payload_buffer) {
                     free(ctx->payload_buffer);
                     ctx->payload_buffer = NULL;
@@ -415,7 +396,7 @@ static void ParseByte(struct ISRO_P2_T* device, PARSER_CONTEXT_T* ctx, uint8_t b
 
         case STATE_PROCESS_NMEA:
             ctx->nmea_buffer[ctx->nmea_index++] = byte;
-            if (byte == '\n' || ctx->nmea_index >= sizeof(ctx->nmea_buffer)-1) {
+            if (byte == '\n' || ctx->nmea_index >= sizeof(ctx->nmea_buffer) - 1) {
                 ProcessNMEASentence(device, ctx->nmea_buffer, ctx->nmea_index);
                 ctx->state = STATE_SEARCH_SYNC;
             }
@@ -428,39 +409,34 @@ static void* ProcessThread(void* arg) {
     struct ISRO_P2_T* device = (struct ISRO_P2_T*)arg;
     uint8_t buffer[1024];
     PARSER_CONTEXT_T ctx = {0};
-    
-    // printf("[Driver] Process Thread Started.\n");
-    
+
     while (device->running) {
         int bytes = RingBuffer_Read(device->ring_buffer, buffer, sizeof(buffer));
         if (bytes > 0) {
-            for(int i=0; i<bytes; i++) ParseByte(device, &ctx, buffer[i]);
+            for (int i = 0; i < bytes; i++) ParseByte(device, &ctx, buffer[i]);
         }
     }
-    if(ctx.payload_buffer) free(ctx.payload_buffer);
+    if (ctx.payload_buffer) free(ctx.payload_buffer);
     return NULL;
 }
 
 static void* ReadThread(void* arg) {
     struct ISRO_P2_T* device = (struct ISRO_P2_T*)arg;
     uint8_t buffer[4096];
-    
-    // printf("[Driver] Read Thread Started.\n");
 
     while (device->running) {
         int target_fd = -1;
 
-        // TCP Connection Management
+        // TCP Connection 관리
         if (device->config.type == CONN_TYPE_TCP_SERVER) {
             if (device->client_fd < 0) {
-                // Accept logic
                 struct sockaddr_in cli_addr;
                 socklen_t clilen = sizeof(cli_addr);
                 fd_set readfds;
                 struct timeval tv = {1, 0};
                 FD_ZERO(&readfds);
                 FD_SET(device->main_fd, &readfds);
-                
+
                 int ret = select(device->main_fd + 1, &readfds, NULL, NULL, &tv);
                 if (ret > 0 && FD_ISSET(device->main_fd, &readfds)) {
                     int newsockfd = accept(device->main_fd, (struct sockaddr*)&cli_addr, &clilen);
@@ -471,19 +447,18 @@ static void* ReadThread(void* arg) {
             target_fd = device->client_fd;
         } else if (device->config.type == CONN_TYPE_TCP_CLIENT) {
             if (device->main_fd < 0) {
-                // Connect logic
                 device->main_fd = socket(AF_INET, SOCK_STREAM, 0);
                 if (device->main_fd >= 0) {
                     struct sockaddr_in serv_addr = {0};
                     serv_addr.sin_family = AF_INET;
                     serv_addr.sin_port = htons(device->config.tcp_port);
                     inet_pton(AF_INET, device->config.tcp_ip, &serv_addr.sin_addr);
-                    
+
                     if (connect(device->main_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-                         close(device->main_fd);
-                         device->main_fd = -1;
-                         sleep(2);
-                         continue;
+                        close(device->main_fd);
+                        device->main_fd = -1;
+                        sleep(2);
+                        continue;
                     }
                 } else {
                     sleep(2);
@@ -501,19 +476,18 @@ static void* ReadThread(void* arg) {
             if (bytes > 0) {
                 RingBuffer_Write(device->ring_buffer, buffer, bytes);
             } else if (bytes == 0) {
-                // EOF Handling
+                // EOF
                 if (device->config.type == CONN_TYPE_TCP_SERVER) {
                     close(device->client_fd); device->client_fd = -1;
                 } else if (device->config.type == CONN_TYPE_TCP_CLIENT) {
                     close(device->main_fd); device->main_fd = -1;
                 }
             } else {
-                // Error Handling
                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                     if (device->config.type == CONN_TYPE_TCP_SERVER) {
-                         close(device->client_fd); device->client_fd = -1;
+                        close(device->client_fd); device->client_fd = -1;
                     } else if (device->config.type == CONN_TYPE_TCP_CLIENT) {
-                         close(device->main_fd); device->main_fd = -1;
+                        close(device->main_fd); device->main_fd = -1;
                     }
                 }
                 usleep(1000);
@@ -528,11 +502,9 @@ static void* ReadThread(void* arg) {
 static int ConfigureSerial(int fd, int baudrate_param) {
     struct termios tty;
     if (tcgetattr(fd, &tty) != 0) return -1;
-    
-    speed_t speed = B921600; // default
-    
-    // Full Standard Baudrate List
-    switch(baudrate_param) {
+
+    speed_t speed = B921600;
+    switch (baudrate_param) {
         case 115200: speed = B115200; break;
         case 460800: speed = B460800; break;
         case 921600: speed = B921600; break;
@@ -541,29 +513,22 @@ static int ConfigureSerial(int fd, int baudrate_param) {
 
     cfsetospeed(&tty, speed);
     cfsetispeed(&tty, speed);
-	
-	// =====================================================
-    // Raw Mode 설정
-    // 바이너리 데이터 중 일부(0x0D, 0x11, 0x13 등) 변조 방지.
-    // =====================================================
-    cfmakeraw(&tty);	
-	    
-	// 추가 세부 설정 (Raw 모드를 더 확실하게 보장)
+
+    // Raw 모드: 바이너리 데이터 중 0x0D/0x11/0x13 등 제어 문자의 변조 방지
+    cfmakeraw(&tty);
+
     tty.c_cflag |= (CLOCAL | CREAD); // 수신 가능, 모뎀 제어 무시
     tty.c_cflag &= ~CSTOPB;          // 1 Stop bit
-    tty.c_cflag &= ~CRTSCTS;         // 하드웨어 흐름 제어 끄기 (중요!)
+    tty.c_cflag &= ~CRTSCTS;         // 하드웨어 흐름 제어 OFF
     tty.c_cflag &= ~PARENB;          // Parity 없음
 
-    // VMIN > 0 으로 설정하여 CPU 인터럽트 빈도를 줄임
-    // 데이터가 최소 32바이트 쌓이거나, 0.1초(VTIME 1)가 지날 때까지 대기
-    tty.c_cc[VMIN] = 32; 
-    tty.c_cc[VTIME] = 1; 
+    // 32바이트 또는 0.1초마다 깨우도록 설정해 CPU 인터럽트 빈도 감소
+    tty.c_cc[VMIN] = 32;
+    tty.c_cc[VTIME] = 1;
 
     if (tcsetattr(fd, TCSANOW, &tty) != 0) return -1;
-    
-    // 입력/출력 버퍼 플러시 (기존 쓰레기 데이터 제거)
+
     tcflush(fd, TCIOFLUSH);
-    
     return 0;
 }
 
@@ -581,7 +546,7 @@ ISRO_P2_T* P2_Open(const P2_Config_T* config) {
         if (device->main_fd < 0) { free(device); return NULL; }
         ConfigureSerial(device->main_fd, config->serial_baud);
         fcntl(device->main_fd, F_SETFL, O_NONBLOCK);
-    } 
+    }
     else if (config->type == CONN_TYPE_TCP_SERVER) {
         device->main_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (device->main_fd < 0) { free(device); return NULL; }
@@ -598,7 +563,7 @@ ISRO_P2_T* P2_Open(const P2_Config_T* config) {
             close(device->main_fd); free(device); return NULL;
         }
     }
-    
+
     device->ring_buffer = RingBuffer_Create(RING_BUFFER_SIZE);
     pthread_mutex_init(&device->data_mutex, NULL);
     device->running = true;
@@ -658,8 +623,8 @@ int P2_SendRTCM(ISRO_P2_T* device, const uint8_t* rtcm_data, uint32_t len) {
     else return -1;
     if (fd < 0) return -1;
 
-    uint8_t header[12] = {0xAC, 0x55, 0x96, 0x83};
-    uint16_t type = 2; // RTK_CORRECTIONS
+    uint8_t header[12] = {PIMTP_SYNC1, PIMTP_SYNC2, PIMTP_SYNC3, PIMTP_SYNC4};
+    uint16_t type = PIMTP_PAYLOAD_RTK_CORRECTIONS;
     memcpy(&header[4], &type, 2);
     memcpy(&header[8], &len, 4);
 
@@ -684,7 +649,6 @@ void P2_SetIMUCallback(ISRO_P2_T* device, IMU_Callback callback, void* user_data
     pthread_mutex_unlock(&device->data_mutex);
 }
 
-//  Status 조회 API
 int P2_GetStatus(ISRO_P2_T* device, STATUS_MESSAGE_T* status) {
     if (!device || !status) return -1;
     pthread_mutex_lock(&device->data_mutex);
@@ -694,7 +658,7 @@ int P2_GetStatus(ISRO_P2_T* device, STATUS_MESSAGE_T* status) {
     return 0;
 }
 
-//  Reset 명령 전송 API 구현 (ID 2410)
+// Reset 명령 전송 (MsgID 2410)
 int P2_SendReset(ISRO_P2_T* device) {
     if (!device) return -1;
     int fd = -1;
@@ -703,35 +667,34 @@ int P2_SendReset(ISRO_P2_T* device) {
     else return -1;
     if (fd < 0) return -1;
 
-    // 전체 패킷 크기: PIMTP Header(12) + Auto Header(16) + Reset Body(12) + CRC(4) = 44 bytes
-    uint8_t packet[44]; 
+    // PIMTP Header(12) + Auto Header(16) + Reset Body(12) + CRC(4) = 44 bytes
+    uint8_t packet[44];
     memset(packet, 0, sizeof(packet));
 
     // 1. PIMTP Header
     PIMTP_HEADER_T* pim_hdr = (PIMTP_HEADER_T*)packet;
-    pim_hdr->sync[0] = 0xAC; pim_hdr->sync[1] = 0x55; 
-    pim_hdr->sync[2] = 0x96; pim_hdr->sync[3] = 0x83;
-    pim_hdr->payload_type = PIMTP_PAYLOAD_AUTOMOTIVE; // Type 1
+    pim_hdr->sync[0] = PIMTP_SYNC1; pim_hdr->sync[1] = PIMTP_SYNC2;
+    pim_hdr->sync[2] = PIMTP_SYNC3; pim_hdr->sync[3] = PIMTP_SYNC4;
+    pim_hdr->payload_type = PIMTP_PAYLOAD_AUTOMOTIVE;
     pim_hdr->payload_length = 16 + 12; // AutoHeader + ResetBody
 
     // 2. Automotive Header
     AUTOMOTIVE_HEADER_T* auto_hdr = (AUTOMOTIVE_HEADER_T*)(packet + 12);
-    auto_hdr->message_id = 2410; // MSG_ID_RESET
-    auto_hdr->message_data_size = 12; // Reset Body Size
-    auto_hdr->time_status = 0; 
+    auto_hdr->message_id = MSG_ID_RESET;
+    auto_hdr->message_data_size = 12;
+    auto_hdr->time_status = 0;
     auto_hdr->gps_week = 0;
     auto_hdr->gps_millisecond = 0;
     auto_hdr->reserved = 0;
 
-    // 3. Reset Body (Table 66, 67)
-    // Type(4) + Param1(4) + Param2(4)
+    // 3. Reset Body (Table 66, 67): Type(4) + Param1(4) + Param2(4)
     uint32_t* body = (uint32_t*)(packet + 12 + 16);
-    body[0] = 0; // 0 = NORMAL RESET [cite: 859]
-    body[1] = 0; // Parameter 1
-    body[2] = 0; // Parameter 2
+    body[0] = 0; // NORMAL RESET
+    body[1] = 0;
+    body[2] = 0;
 
-    // 4. CRC Calculation
-    uint32_t crc = CalculateNovAtelCRC32(packet, 40); // Header + Payload
+    // 4. CRC
+    uint32_t crc = CalculateNovAtelCRC32(packet, 40);
     memcpy(packet + 40, &crc, 4);
 
     // 5. Send
