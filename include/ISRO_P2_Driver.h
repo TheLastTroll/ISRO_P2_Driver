@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------
-// [복구됨] 상수 및 Enum 정의
+// 상수 및 Enum 정의
 // ---------------------------------------------------------
 
 // Time Status Values (Table 44)
@@ -20,11 +20,12 @@ typedef enum {
     GPSTIME_FINESTEERING = 180  // Time is accurate
 } TIME_STATUS_E;
 
-// Position Type (Table 48)
+// Position Type (Table 48, PIM222A)
 typedef enum {
     POS_TYPE_NONE = 0,
     POS_TYPE_SINGLE = 16,
-    POS_TYPE_PSRDIFF = 17,
+    // 17~18: Reserved in PIM222A (PSRDIFF는 OEM7 표준에만 존재)
+    POS_TYPE_PROPAGATED = 19,
     POS_TYPE_NARROW_FLOAT = 34,
     POS_TYPE_L1_INT = 48,
     POS_TYPE_WIDE_INT = 49,
@@ -35,7 +36,7 @@ typedef enum {
     POS_TYPE_INS_RTKFIXED = 56  // INS RTK Fixed
 } POSITION_TYPE_E;
 
-// INS Status Types (Table 47) - 참고용
+// INS Status Types (Table 47)
 typedef enum {
     INS_INACTIVE = 0,
     INS_ALIGNING = 1,
@@ -54,10 +55,10 @@ typedef enum {
 // 데이터 구조체 정의
 // ---------------------------------------------------------
 
-// PVA 메시지 구조체 (Message ID: 2379)
-// Table 46: PVA Message Definition
+// PVA 메시지 구조체 (Message ID: 2379, Table 46)
+// Wire payload: 126 bytes (ins_status ~ time_since_update)
+// 그 뒤 header_gps_week/ms는 Automotive Header에서 채워 넣는 내부용 필드
 typedef struct __attribute__((packed)) {
-    // --- Wire Payload (장비에서 오는 실제 데이터 126 bytes) ---
     uint32_t ins_status;              // Field 1: INS Status (INS_STATUS_E)
     uint32_t position_type;           // Field 2: Position Type (POSITION_TYPE_E)
     double   latitude;                // Field 3: Latitude (degrees)
@@ -82,13 +83,12 @@ typedef struct __attribute__((packed)) {
     uint32_t extended_solution_status; // Field 22: Extended solution status (Table 49)
     uint16_t time_since_update;       // Field 23: Time since last position update (s)
 
-    // --- Internal Use Only (드라이버가 채우는 필드) ---
-    uint16_t header_gps_week;         // From Automotive Header
-    uint32_t header_gps_ms;           // From Automotive Header
+    // 드라이버 내부에서 Automotive Header로부터 채우는 필드
+    uint16_t header_gps_week;
+    uint32_t header_gps_ms;
 } PVA_MESSAGE_T;
 
-// IMU 메시지 구조체 (Message ID: 2389)
-// Table 52: IMU Message Definition
+// IMU 메시지 구조체 (Message ID: 2389, Table 52)
 typedef struct __attribute__((packed)) {
     double   gps_second;              // Field 1: GPS Second
     int32_t  scaled_accel_z;          // Field 2: Scaled Z Acceleration
@@ -100,7 +100,7 @@ typedef struct __attribute__((packed)) {
     uint32_t imu_status_mask;         // Field 8: IMU Status Mask
 } IMU_MESSAGE_T;
 
-// STATUS 메시지 구조체 (Message ID: 2393) - Table 54
+// STATUS 메시지 구조체 (Message ID: 2393, Table 54)
 typedef struct __attribute__((packed)) {
     uint32_t error_word;          // Field 1
     uint32_t status_word;         // Field 2
@@ -138,7 +138,7 @@ typedef struct {
     P2_CONN_TYPE_E type;
     char serial_port[64];
     int serial_baud;
-    char tcp_ip[64]; 
+    char tcp_ip[64];
     int tcp_port;
 } P2_Config_T;
 
@@ -152,13 +152,13 @@ void P2_Close(ISRO_P2_T* device);
 int P2_GetPVA(ISRO_P2_T* device, PVA_MESSAGE_T* pva);
 int P2_GetIMU(ISRO_P2_T* device, IMU_MESSAGE_T* imu);
 
-// [NTRIP용] NMEA 데이터 가져오기
+// NTRIP용 NMEA 데이터 가져오기
 int P2_GetNMEA(ISRO_P2_T* device, char* buffer, int buffer_len);
 
-// [RTK용] RTCM 데이터 전송하기
+// RTK용 RTCM 데이터 전송
 int P2_SendRTCM(ISRO_P2_T* device, const uint8_t* rtcm_data, uint32_t len);
 
-// 상태 조회 및 리셋 함수
+// 상태 조회 및 리셋
 int P2_GetStatus(ISRO_P2_T* device, STATUS_MESSAGE_T* status);
 int P2_SendReset(ISRO_P2_T* device);
 
