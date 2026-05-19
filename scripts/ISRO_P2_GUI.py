@@ -389,7 +389,7 @@ class PIM222A_GUI(QMainWindow):
         h_layout.addWidget(baud_combo)
         layout.addLayout(h_layout)
         
-        # [추가] COM1 전용 Interface Mode (TX Protocol) 설정
+        # COM1 전용 Interface Mode (TX Protocol) 설정
         if show_protocol:
             proto_layout = QHBoxLayout()
             proto_layout.addWidget(QLabel("TX Protocol:"))
@@ -666,7 +666,7 @@ class PIM222A_GUI(QMainWindow):
         """Config 생성 (표준 Interval 보정 적용)"""
         config = []
         
-        # [추가] COM1 Interface Mode 설정 (맨 위에 배치)
+        # COM1 Interface Mode 설정 (맨 위에 배치)
         if hasattr(self, "com1_protocol"):
             if "NMEA" in self.com1_protocol.currentText():
                 config.append("InterfaceMode:COM1,PIMTP,NMEA")
